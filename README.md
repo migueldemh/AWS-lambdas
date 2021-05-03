@@ -8,9 +8,9 @@
 
 ## Background and What is this.
 
-Playing with different ways to build lambda funtions and ended with this.
+Playing with different ways to build lambda functions and ended with this.
 
-The following code deploy a lambada funtion to monitor the connectivity of an URL. When the URL is no reachable via port 443 a Cloudwatch alarm is triggered.
+The following code deploy a lambada function to monitor the connectivity of an URL. When the URL is no reachable via port 443 a Cloudwatch alarm is triggered.
 
 - The installation is done by the makefile (I am using this for fun and learn about it, not recomneded).
 - The provision is done by Cloudformation. The code is ship on S3.
