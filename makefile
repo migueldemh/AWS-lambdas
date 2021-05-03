@@ -11,13 +11,13 @@ URLNAME=https://<URL or IP>
 
 init:	
 	docker run --rm -v `pwd`:/src -w /src python /bin/bash -c "apt-get update && \
-    mkdir -p ./code && \
+	mkdir -p ./code && \
 	pip install requests -t ./code"
 
 lambda.zip:
 	cp lambda-monitor-url.py ./code 
 	docker run --rm -v `pwd`:/src -w /src python /bin/bash -c "apt-get update && \
-    apt-get install -y zip && \
+	apt-get install -y zip && \
 	cd code; zip -r ../${LAMBDA_ZIP} ."
 
 package: lambda.zip
