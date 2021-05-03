@@ -1,0 +1,202 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Monitor a url via lambda, raise a cloudwatch alarm and send SNS notification when HTTPS access fails",
+
+    "Parameters": {
+     "URLname": {
+         "Type": "String",
+         "Description": "URL to monitor"
+     },
+     "URLConnectionTimeout": {
+         "Description": "URL connection timeout in seconds",
+         "Type": "Number",
+         "Default": 15
+     },
+     "URLValidResponseCode": {
+         "Description": "Connection OK respnse code - usually 200",
+         "Type": "Number",
+         "Default": 200
+     },
+     "CloudWatchLogsRetentionInDays": {
+         "Description": "log retention in days",
+         "Type": "Number",
+         "Default": 30,
+         "AllowedValues": [5,7,14,30,60,90,120,150,180,365,400,545,731,1827,3653]
+         },
+     "Email" : {
+         "Type" : "String",
+         "Description" : "Email address to notify when an https access fails"
+     },
+     "VpcId": {
+         "Type" : "AWS::EC2::VPC::Id",
+         "Description": "The Central VPC id"
+     },
+     "ResouceToMonitor": {
+         "Type" : "String",
+         "Description": "Resource name"
+     },
+     "SubnetId": {
+        "Type" : "AWS::EC2::Subnet::Id",
+        "Description": "A subnet id"
+    },
+     "S3Bucket": {
+        "Type" : "String",
+        "Description": "Bucket with lambda code"
+    },
+    "S3Key": {
+        "Type" : "String",
+        "Description": "Lambda code location"
+    }
+    },
+ 
+    "Resources": {
+     "LambdaIAMRole": {
+         "Type": "AWS::IAM::Role",
+         "Properties": {
+             "AssumeRolePolicyDocument": {
+                 "Version": "2012-10-17",
+                 "Statement": [
+                     {
+                         "Effect": "Allow",
+                         "Principal": { "Service": [ "lambda.amazonaws.com" ] },
+                         "Action": [ "sts:AssumeRole" ]
+                     }
+                       ]
+                 },
+             "Path": "/",
+             "ManagedPolicyArns": [
+                 "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+             ],
+             "Policies": [
+                 {
+                     "PolicyName": "root",
+                     "PolicyDocument": {
+                         "Version": "2012-10-17",
+                         "Statement": [
+                             {
+                                 "Sid": "Stmt2019020101",
+                                 "Effect": "Allow",
+                                           "Action": [ "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents" ],
+                                           "Resource": "arn:aws:logs:*:*:*"
+                                     }
+                                   ]
+                             }
+                       }
+                 ]
+               }
+     },
+     "LambdaSG": {
+         "Type": "AWS::EC2::SecurityGroup",
+         "Properties": {
+             "GroupDescription": "Lamdba SG to allow https from lambda function",
+             "VpcId": { "Ref": "VpcId" },
+             "Tags": [{
+                 "Key": "Name",
+                 "Value": "Lamdba VPC SG to allow https from lambda function"} ],
+             "SecurityGroupEgress": [
+                 { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                     "CidrIp": "0.0.0.0/0"}
+             ]
+         }
+     },
+     "LambdaMonitor": {
+         "Type": "AWS::Lambda::Function",
+         "Properties": {
+            "FunctionName": { "Fn::Join": [ "-", [ {"Ref": "ResouceToMonitor"},"HTTPS_connection",{ "Ref": "AWS::Region" } ] ] },
+            "Description": "monitors https access to URL or IP",
+            "Code": {
+            "S3Bucket": { "Ref": "S3Bucket"},
+            "S3Key": {"Fn::Join": ["", ["lambdas/", {"Ref": "S3Key"}]]}
+             },
+             "Handler": "lambda-monitor-url.lambda_handler",
+             "Runtime": "python3.6",
+             "Timeout": 30,
+             "Environment": {
+                 "Variables": {
+                     "url": { "Ref": "URLname" },
+                     "response_code": { "Ref": "URLValidResponseCode" },
+                     "response_timeout": { "Ref": "URLConnectionTimeout" },
+                     "PYTHONWARNINGS": "ignore:Unverified HTTPS request"
+                 }
+             },
+             "Role": {"Fn::GetAtt": ["LambdaIAMRole", "Arn"]},
+             "VpcConfig": {
+                 "SecurityGroupIds": [ { "Ref": "LambdaSG" }],
+                 "SubnetIds": [ { "Ref": "SubnetId"}]
+             }
+         }
+     },
+     "LogGroup": {
+         "Type": "AWS::Logs::LogGroup",
+         "Properties": {
+             "RetentionInDays": { "Ref": "CloudWatchLogsRetentionInDays" },
+             "LogGroupName": {"Fn::Join": ["", ["/aws/lambda/", {"Ref": "LambdaMonitor"}]]}
+         }
+     },
+     "ScheduledRule": {
+         "Type": "AWS::Events::Rule",
+         "Properties": {
+             "Description": "ScheduledRule",
+             "ScheduleExpression": "rate(5 minutes)",
+             "State": "ENABLED",
+             "Targets": [{
+                 "Arn": { "Fn::GetAtt": ["LambdaMonitor", "Arn"] },
+                 "Id": { "Fn::Join": [ "-", [ {"Ref": "ResouceToMonitor"},"HTTPS_connection",{ "Ref": "AWS::Region" } ] ] } 
+             }]
+         }
+     },
+     "PermissionForEventsToInvokeLambda": {
+         "Type": "AWS::Lambda::Permission",
+         "Properties": {
+             "FunctionName": { "Fn::Join": [ "-", [ {"Ref": "ResouceToMonitor"},"HTTPS_connection",{ "Ref": "AWS::Region" } ] ] },
+             "Action": "lambda:InvokeFunction",
+             "Principal": "events.amazonaws.com",
+             "SourceArn": { "Fn::GetAtt": ["ScheduledRule", "Arn"] }
+         }
+     },
+     "AlarmNotificationTopic": {
+         "Type": "AWS::SNS::Topic",
+         "Properties": {
+             "Subscription": [ {
+                 "Endpoint": { "Ref": "Email" },
+                 "Protocol": "email"
+             } ]
+         }
+     },
+     "SvcDownAlarm": {
+                 "Type": "AWS::CloudWatch::Alarm",
+                 "DependsOn": [ "PermissionForEventsToInvokeLambda"],
+                 "Properties": {
+                         "AlarmName":  { "Fn::Join": [ "-", [ {"Ref": "ResouceToMonitor"},"HTTPS_connection",{ "Ref": "AWS::Region" } ] ] },
+                         "AlarmDescription": { "Fn::Join": [ "", [ {"Ref": "ResouceToMonitor"}," is NOT responding to https in",{ "Ref": "AWS::Region" } ] ] },
+                         "MetricName": "Errors",
+                         "Namespace": "AWS/Lambda",
+                         "Dimensions": [ {
+                             "Name": "FunctionName",
+                             "Value": { "Fn::Join": [ "-", [ {"Ref": "ResouceToMonitor"},"HTTPS_connection",{ "Ref": "AWS::Region" } ] ] }
+                         } ],
+                         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+                         "EvaluationPeriods": 2,
+                         "Period": 300,
+                         "Statistic": "Sum",
+                         "TreatMissingData": "missing",
+                         "Threshold": 1,
+                 "AlarmActions": [{ "Ref": "AlarmNotificationTopic" }],
+                 "OKActions": [{ "Ref": "AlarmNotificationTopic" }]
+         }
+         }
+    },
+ 
+ 
+    "Outputs": {
+    "LambdaMonitor" : {
+            "Description": "Lambda function",
+            "Value":  { "Ref" : "LambdaMonitor" } 
+        },
+     "AlarmName" : {
+         "Description": "Alarm name",
+         "Value":  { "Ref" : "SvcDownAlarm" } 
+     }
+
+    }
+ }
